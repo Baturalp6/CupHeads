@@ -6,7 +6,9 @@ Bug-fix release from playtest reports. Wire protocol bumped to 4, so both player
 
 - Overworld: the guest no longer spawns where its own save file left Player Two. The guest's map body snaps to the host's position on arrival and is corrected when it drifts beyond what latency explains.
 - Tutorial: the parry-sphere chain is host-authoritative. Before, each PC advanced it on local parries, so host and guest highlighted different pink spheres and only the host's one actually worked. The guest now replays the host's advances through a new world-event packet.
-- Revives: a revive decided on the host is mirrored to the guest. Before, the guest only revived if its delayed copy of the partner also hit the ghost; otherwise the guest's body stayed deactivated and invisible on its own screen while the host saw it alive. Guests no longer start revives of the two built-in players locally.
+- Revives: a revive decided on the host is mirrored to the guest. Before, the guest only revived if its delayed copy of the partner also hit the ghost; otherwise the guest's body stayed deactivated and invisible on its own screen while the host saw it alive. Guests no longer start revives of the two built-in players locally; when the guest parries the host's ghost it sends a revive request to the host instead.
+- Tutorial: when the guest parries the pink sphere on its own screen, it asks the host to advance that sphere, so the guest's parries count even if the host's copy of the guest just misses.
+- Overworld: a leftover position snapshot from the previous scene is discarded on map load, so it cannot misplace the guest.
 
 ## v1.4.1 - 2026-10-11
 

@@ -120,6 +120,11 @@ namespace CupheadOnline.Patches
         internal static void ResetForNewMap()
         {
             _initialMapSnapDone = false;
+
+            // A snapshot from the previous scene (level coordinates) must not
+            // become the initial map placement.
+            if (MultiplayerSession.IsClient)
+                RemotePlayer.Reset(MultiplayerSession.LocalId);
         }
 
         /// <summary>

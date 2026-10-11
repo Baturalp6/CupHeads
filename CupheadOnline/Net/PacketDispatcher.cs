@@ -266,7 +266,7 @@ namespace CupheadOnline.Net
 
                 case PacketType.WorldEvent:
                 {
-                    if (MultiplayerSession.IsHost) break;
+                    // Guest: host's change to replay. Host: guest's request.
                     var pkt = new WorldEventPacket();
                     pkt.Read(r);
                     WorldEventSync.Apply(pkt);

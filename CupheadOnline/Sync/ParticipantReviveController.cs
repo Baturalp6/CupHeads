@@ -181,8 +181,28 @@ namespace CupheadOnline.Sync
             if (!TryGetDeathEffectPlayerId(effect, out owner))
                 return false;
 
-            return owner == PlayerId.PlayerOne || owner == PlayerId.PlayerTwo;
+            if (owner != PlayerId.PlayerOne && owner != PlayerId.PlayerTwo)
+                return false;
+
+            // The guest itself parried the partner's ghost. The host's copy of
+            // the guest may just miss it, so ask the host to revive explicitly;
+            // a revive already underway there makes this a no-op.
+            if (owner != MultiplayerSession.LocalId && Time.unscaledTime >= _nextGuestParryRequestTime)
+            {
+                _nextGuestParryRequestTime = Time.unscaledTime + 0.5f;
+                var request = new ReviveRequestPacket
+                {
+                    PosX = effect.transform.position.x,
+                    PosY = effect.transform.position.y,
+                    Tick = MultiplayerSession.Tick,
+                };
+                Plugin.Net.SendReviveRequest(ref request);
+            }
+
+            return true;
         }
+
+        static float _nextGuestParryRequestTime;
 
         public static void ApplyGrant(ReviveGrantPacket pkt)
         {

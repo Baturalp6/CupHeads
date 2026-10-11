@@ -57,21 +57,61 @@ namespace CupheadOnline.Sync
             Plugin.Net.SendWorldEvent(ref pkt);
         }
 
+        /// <summary>
+        /// Guest-side: the guest's own body triggered the change locally. The
+        /// host's copy of the guest may just miss it, so report it; the host
+        /// applies it only if that object is still in the expected state.
+        /// </summary>
+        public static void RequestFromGuest(WorldEventKind kind, GameObject target)
+        {
+            if (!MultiplayerSession.IsActive || !MultiplayerSession.IsClient)
+                return;
+            if (Plugin.Net == null || !Plugin.Net.IsConnected || target == null)
+                return;
+
+            var pkt = new WorldEventPacket
+            {
+                Kind = (byte)kind,
+                ObjectId = EnemyRegistry.GetStableId(target),
+                Tick = MultiplayerSession.Tick,
+            };
+            Plugin.Net.SendWorldEvent(ref pkt);
+        }
+
+        /// <summary>Guest: replay the host's change. Host: handle a guest request.</summary>
         public static void Apply(WorldEventPacket pkt)
         {
+            bool isRequest = MultiplayerSession.IsHost;
             switch ((WorldEventKind)pkt.Kind)
             {
                 case WorldEventKind.TutorialParryAdvance:
-                    Replay<TutorialLevelParryNext>(pkt.ObjectId, TutorialSetNextParry);
+                    Replay<TutorialLevelParryNext>(pkt.ObjectId, TutorialSetNextParry, isRequest ? TutorialParrySwitchField : null);
                     break;
 
                 case WorldEventKind.TutorialShmupParryAdvance:
-                    Replay<TutorialShmupLevelParryNext>(pkt.ObjectId, TutorialShmupSetNextParry);
+                    Replay<TutorialShmupLevelParryNext>(pkt.ObjectId, TutorialShmupSetNextParry, isRequest ? TutorialShmupParrySwitchField : null);
                     break;
             }
         }
 
-        static void Replay<T>(int objectId, MethodInfo method) where T : Component
+        static readonly FieldInfo TutorialParrySwitchField =
+            AccessTools.Field(typeof(TutorialLevelParryNext), "parrySwitch");
+        static readonly FieldInfo TutorialShmupParrySwitchField =
+            AccessTools.Field(typeof(TutorialShmupLevelParryNext), "parrySwitch");
+
+        /// <summary>
+        /// A guest request only advances the sphere that is pink right now on
+        /// the host, so a request racing the host's own advance is dropped.
+        /// </summary>
+        static bool IsActiveParrySphere(Component sphere, FieldInfo parrySwitchField)
+        {
+            if (parrySwitchField == null)
+                return false;
+            var parrySwitch = parrySwitchField.GetValue(sphere) as Behaviour;
+            return parrySwitch != null && parrySwitch.enabled;
+        }
+
+        static void Replay<T>(int objectId, MethodInfo method, FieldInfo requireActiveSwitch = null) where T : Component
         {
             if (method == null)
                 return;
@@ -82,6 +122,8 @@ namespace CupheadOnline.Sync
                 var candidate = candidates[i];
                 if (candidate == null || EnemyRegistry.GetStableId(candidate.gameObject) != objectId)
                     continue;
+                if (requireActiveSwitch != null && !IsActiveParrySphere(candidate, requireActiveSwitch))
+                    return;
 
                 _applyingRemote = true;
                 try

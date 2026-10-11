@@ -11,9 +11,12 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(TutorialLevelParryNext), "SetNextParry")]
     public static class TutorialParryNextPatch
     {
-        static bool Prefix()
+        static bool Prefix(TutorialLevelParryNext __instance)
         {
-            return WorldEventSync.MayRunLocally;
+            if (WorldEventSync.MayRunLocally)
+                return true;
+            WorldEventSync.RequestFromGuest(WorldEventKind.TutorialParryAdvance, __instance.gameObject);
+            return false;
         }
 
         static void Postfix(TutorialLevelParryNext __instance)
@@ -26,9 +29,12 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(TutorialShmupLevelParryNext), "SetNextParry")]
     public static class TutorialShmupParryNextPatch
     {
-        static bool Prefix()
+        static bool Prefix(TutorialShmupLevelParryNext __instance)
         {
-            return WorldEventSync.MayRunLocally;
+            if (WorldEventSync.MayRunLocally)
+                return true;
+            WorldEventSync.RequestFromGuest(WorldEventKind.TutorialShmupParryAdvance, __instance.gameObject);
+            return false;
         }
 
         static void Postfix(TutorialShmupLevelParryNext __instance)
