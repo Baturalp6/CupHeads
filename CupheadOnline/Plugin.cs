@@ -201,6 +201,9 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(LevelStartPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerDeathStatePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerReviveStatePatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(PlayerDeathEffectGuestParryGatePatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(TutorialParryNextPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(TutorialShmupParryNextPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerStatsInitialStatusPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerStatsHealthChangedPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerDeathEffectReviveOutOfFramePatch));
@@ -522,6 +525,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.4.1";
+        public const string VERSION = "1.4.2";
     }
 }

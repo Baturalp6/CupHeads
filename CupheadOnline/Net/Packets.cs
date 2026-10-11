@@ -16,7 +16,8 @@ namespace CupheadOnline.Net
     public static class NetProtocol
     {
         // 3: InputFramePacket gained PressLatch (lossless button presses).
-        public const byte PROTOCOL = 3;
+        // 4: WorldEvent packet, ReviveGrant mirror flag.
+        public const byte PROTOCOL = 4;
     }
 
     public enum PacketType : byte
@@ -48,6 +49,39 @@ namespace CupheadOnline.Net
         CommMessage = 24,
         StatsReport = 25,
         StateHash = 26,
+        WorldEvent = 27,
+    }
+
+    public enum WorldEventKind : byte
+    {
+        None = 0,
+        TutorialParryAdvance = 1,
+        TutorialShmupParryAdvance = 2,
+    }
+
+    /// <summary>
+    /// Host → guest: a scripted level object changed state on the host. The
+    /// object is addressed by its deterministic hierarchy hash (EnemyRegistry).
+    /// </summary>
+    public struct WorldEventPacket : IPacket
+    {
+        public byte Kind;
+        public int ObjectId;
+        public uint Tick;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(Kind);
+            w.Write(ObjectId);
+            w.Write(Tick);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            Kind = r.ReadByte();
+            ObjectId = r.ReadInt32();
+            Tick = r.ReadUInt32();
+        }
     }
 
     /// <summary>Named weapon-event kinds (previously magic bytes 0–4).</summary>
@@ -665,6 +699,11 @@ namespace CupheadOnline.Net
 
         public bool ApplyDonorCost => (Flags & 1) != 0;
         public bool ApplyRevive => (Flags & 2) != 0;
+        /// <summary>
+        /// Host-authoritative mirror: revive TargetParticipantId's copy on the
+        /// receiver (local body or proxy) instead of the receiver's own slot.
+        /// </summary>
+        public bool IsMirror => (Flags & 4) != 0;
 
         public void Write(BinaryWriter w)
         {

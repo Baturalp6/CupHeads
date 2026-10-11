@@ -1513,6 +1513,7 @@ namespace CupheadOnline.Net
         public void SendCommMessage (ref CommMessagePacket  p) => Send(PacketType.CommMessage,  ref p, true);
         public void SendStatsReport (ref StatsReportPacket  p) => Send(PacketType.StatsReport,  ref p, true);
         public void SendStateHash   (ref StateHashPacket    p) => Send(PacketType.StateHash,    ref p, false);
+        public void SendWorldEvent  (ref WorldEventPacket   p) => Send(PacketType.WorldEvent,   ref p, true);
         public void SendSceneChange (ref SceneChangePacket  p) => Send(PacketType.SceneChange,  ref p, true);
         public void SendMenuSceneChange(ref MenuSceneChangePacket p) => Send(PacketType.MenuSceneChange, ref p, true);
         public void SendSaveSlotSync(ref SaveSlotSyncPacket p) => Send(PacketType.SaveSlotSync, ref p, true);

@@ -102,6 +102,63 @@ namespace CupheadOnline.Patches
 
             var packet = BuildMapStatePacket(player, __instance);
             Plugin.Net.SendPlayerState(ref packet);
+
+            if (MultiplayerSession.IsClient && MultiplayerSession.IsLocalPlayer(player.id))
+                ApplyHostMapCorrection(__instance, player.id);
+        }
+
+        // Map movement is 2.5 world units per second (MapPlayerMotor.SPEED).
+        const float MapSpeed = 2.5f;
+        const float MapBaseTolerance = 0.25f;
+        const float MapSnapDistance = 3f;
+        const float MapCorrectionBlend = 0.2f;
+        const float MapMaxSnapshotAge = 0.75f;
+
+        static bool _initialMapSnapDone;
+
+        /// <summary>Called when a map scene starts; the next host snapshot places the guest.</summary>
+        internal static void ResetForNewMap()
+        {
+            _initialMapSnapDone = false;
+        }
+
+        /// <summary>
+        /// The guest's own map body spawns from the guest's save file
+        /// (CurrentMapData.playerTwoPosition), which is unrelated to where the
+        /// host's world has that player. The host simulates the guest's body,
+        /// so its position wins: snap once on arrival, then only correct drift
+        /// beyond what latency explains.
+        /// </summary>
+        static void ApplyHostMapCorrection(MapPlayerMotor motor, PlayerId playerId)
+        {
+            PlayerStatePacket snapshot;
+            if (!RemotePlayer.TryConsumeLocalAuthoritySnapshot(playerId, MapMaxSnapshotAge, out snapshot))
+                return;
+
+            var current = motor.transform.position;
+            var target = new Vector3(snapshot.PosX, snapshot.PosY, current.z);
+            float distance = Vector2.Distance(current, target);
+
+            Vector3 next;
+            if (!_initialMapSnapDone || distance > MapSnapDistance)
+            {
+                _initialMapSnapDone = true;
+                next = target;
+            }
+            else
+            {
+                float rttSeconds = Plugin.Net != null ? Mathf.Max(0, Plugin.Net.Latency) / 1000f : 0f;
+                float tolerance = MapBaseTolerance + MapSpeed * (rttSeconds + 0.05f);
+                if (distance <= tolerance)
+                    return;
+
+                next = Vector3.Lerp(current, target, MapCorrectionBlend);
+            }
+
+            motor.transform.position = next;
+            var body = motor.GetComponent<Rigidbody2D>();
+            if (body != null)
+                body.position = next;
         }
 
         static PlayerStatePacket BuildMapStatePacket(MapPlayerController player, MapPlayerMotor motor)

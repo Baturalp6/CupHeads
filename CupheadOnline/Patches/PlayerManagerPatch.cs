@@ -57,6 +57,7 @@ namespace CupheadOnline.Patches
         static void Prefix()
         {
             MultiplayerSession.EnsureCupheadMultiplayerState();
+            MapPlayerMotorPatch.ResetForNewMap();
         }
     }
 

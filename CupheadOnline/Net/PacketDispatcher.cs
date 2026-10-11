@@ -264,6 +264,15 @@ namespace CupheadOnline.Net
                     break;
                 }
 
+                case PacketType.WorldEvent:
+                {
+                    if (MultiplayerSession.IsHost) break;
+                    var pkt = new WorldEventPacket();
+                    pkt.Read(r);
+                    WorldEventSync.Apply(pkt);
+                    break;
+                }
+
                 // Handshake packets are consumed by SteamNetManager before reaching here
                 case PacketType.Hello:
                 case PacketType.Welcome:

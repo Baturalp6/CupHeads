@@ -132,12 +132,71 @@ namespace CupheadOnline.Sync
                 SendGrantToRemoteOwner(net, requesterParticipantId, requesterParticipantId, donorParticipantId, donorPosition, tick, applyDonorCost: false, applyRevive: true);
         }
 
+        /// <summary>
+        /// Host-side: a built-in player was just revived here; make the guest
+        /// revive its copy of that same player (its own body or the proxy).
+        /// </summary>
+        public static void MirrorHostRevive(AbstractPlayerController player, Vector3 position)
+        {
+            if (player == null || !MultiplayerSession.IsActive || !MultiplayerSession.IsHost)
+                return;
+            if (LocalDevSession.IsActive)
+                return;
+            if (Plugin.Net == null || !Plugin.Net.IsConnected)
+                return;
+            if (player.id != PlayerId.PlayerOne && player.id != PlayerId.PlayerTwo)
+                return;
+            byte extraParticipantId;
+            if (ExtraRemoteAvatarManager.TryGetParticipantId(player, out extraParticipantId))
+                return;
+
+            var pkt = new ReviveGrantPacket
+            {
+                TargetParticipantId = (byte)player.id,
+                DonorParticipantId = byte.MaxValue,
+                Flags = 2 | 4,
+                RevivePosX = position.x,
+                RevivePosY = position.y,
+                Tick = MultiplayerSession.Tick,
+            };
+            Plugin.Net.SendReviveGrantToParticipant((byte)PlayerId.PlayerTwo, ref pkt);
+        }
+
+        /// <summary>
+        /// Guest-side: revives of the two built-in players are host-driven, so a
+        /// local parry of their ghost must not start a revive on its own.
+        /// </summary>
+        public static bool ShouldBlockGuestGhostParry(PlayerDeathEffect effect)
+        {
+            if (!MultiplayerSession.IsClient || LocalDevSession.IsActive || effect == null)
+                return false;
+            if (Plugin.Net == null || !Plugin.Net.IsConnected)
+                return false;
+
+            ExtraParticipantDeathBubbleTag tag;
+            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out tag))
+                return false;
+
+            PlayerId owner;
+            if (!TryGetDeathEffectPlayerId(effect, out owner))
+                return false;
+
+            return owner == PlayerId.PlayerOne || owner == PlayerId.PlayerTwo;
+        }
+
         public static void ApplyGrant(ReviveGrantPacket pkt)
         {
             if (!MultiplayerSession.IsActive)
                 return;
             if (!MarkGrantApplied(pkt))
                 return;
+
+            if (pkt.IsMirror)
+            {
+                if (pkt.ApplyRevive && pkt.TargetParticipantId <= (byte)PlayerId.PlayerTwo)
+                    ApplyLocalRevive((PlayerId)pkt.TargetParticipantId, new Vector2(pkt.RevivePosX, pkt.RevivePosY));
+                return;
+            }
 
             PlayerId localPlayerId = MultiplayerSession.LocalId;
             if (pkt.ApplyDonorCost)
@@ -188,6 +247,11 @@ namespace CupheadOnline.Sync
         {
             var player = GetPlayerSafe(localPlayerId);
             if (player == null)
+                return;
+
+            // Already alive (or a revive is underway): a duplicate grant must
+            // not teleport and knock up a living player.
+            if (!player.IsDead)
                 return;
 
             var deathEffect = FindLocalDeathEffect(localPlayerId);
