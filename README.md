@@ -4,6 +4,18 @@ Steam P2P multiplayer mod project for Cuphead, built with BepInEx, Harmony, Stea
 
 This repository is intended to provide the source code, build scripts, documentation, and development notes for the CupHeads project.
 
+## Quick install (download and play)
+
+1. Download `CupHeads-v1.4.1-full-x64.zip` from the [latest release](https://github.com/Baturalp6/CupHeads/releases/latest). It already contains BepInEx 5.4.23.5, the mod and the intro video.
+2. Close Cuphead. In Steam, right-click Cuphead > Manage > Browse local files.
+3. Extract everything from the zip into that folder, so `winhttp.dll` sits next to `Cuphead.exe`. Allow overwriting.
+4. Start Cuphead through Steam. The title screen now has a MULTIPLAYER entry.
+5. One player picks Host Game and invites the other through Steam; the other accepts the invite; the host picks a save slot.
+
+Both players need the same version. Already have BepInEx? `CupHeads-v1.4.1.zip` contains only the mod DLL in the right folder.
+
+Uninstall: delete `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, `changelog.txt` and the `BepInEx` folder from the Cuphead folder.
+
 ## Repository contents
 
 * `CupheadOnline/` - the BepInEx + Harmony mod source
