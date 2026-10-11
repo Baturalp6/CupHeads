@@ -24,9 +24,25 @@ namespace CupheadOnline.Sync
     {
         private const int LEVEL_BOSS_HP_ID = int.MinValue;
 
-        private static int   _broadcastCounter;
-        private const  int   BROADCAST_EVERY = 3; // frames (= 20 Hz at 60 Hz)
+        // Time-based rates: frame-based counters sent every frame in boss fights,
+        // i.e. 144+ packets/s per enemy on high-refresh monitors.
+        private const float NORMAL_INTERVAL = 1f / 20f;
+        private const float PRIORITY_INTERVAL = 1f / 30f;
+        private const float RECEIVER_RESCAN_INTERVAL = 0.5f;
+        private static float _nextBroadcastAt;
         private static int   _recoveryBurstFrames;
+
+        // FindObjectsOfType walks the whole scene; refreshing it twice a second
+        // instead of every frame removes a constant host-side hitch.
+        private static DamageReceiver[] _cachedReceivers = new DamageReceiver[0];
+        private static float _nextReceiverScanAt;
+
+        // Client: only force the host's animator state after it has disagreed
+        // for a while. The host's state is always a little old, and snapping to
+        // it on every packet restarted animations and re-fired their events.
+        private const float ANIM_MISMATCH_GRACE = 0.4f;
+        private const float ENEMY_SNAP_DISTANCE = 200f;
+        private static readonly Dictionary<int, float> _animMismatchSince = new Dictionary<int, float>(64);
 
         private static readonly Dictionary<System.Type, FieldInfo> _phaseFields =
             new Dictionary<System.Type, FieldInfo>(64);
@@ -55,14 +71,20 @@ namespace CupheadOnline.Sync
         {
             if (!MultiplayerSession.IsHost || Plugin.Net == null || !Plugin.Net.IsConnected) return;
 
-            var enemies = Object.FindObjectsOfType<DamageReceiver>();
+            float now = Time.unscaledTime;
+            if (now < _nextBroadcastAt) return;
+
+            if (now >= _nextReceiverScanAt)
+            {
+                _nextReceiverScanAt = now + RECEIVER_RESCAN_INTERVAL;
+                _cachedReceivers = Object.FindObjectsOfType<DamageReceiver>();
+            }
+
+            var enemies = _cachedReceivers;
             int enemyCount = CountEnemies(enemies);
             bool bossPriorityMode = _recoveryBurstFrames > 0 || enemyCount <= 3;
 
-            _broadcastCounter++;
-            int broadcastEvery = bossPriorityMode ? 1 : BROADCAST_EVERY;
-            if (_broadcastCounter < broadcastEvery) return;
-            _broadcastCounter = 0;
+            _nextBroadcastAt = now + (bossPriorityMode ? PRIORITY_INTERVAL : NORMAL_INTERVAL);
             if (_recoveryBurstFrames > 0)
                 _recoveryBurstFrames--;
 
@@ -70,7 +92,9 @@ namespace CupheadOnline.Sync
 
             foreach (var dr in enemies)
             {
+                if (dr == null) continue;   // destroyed since the last scan
                 if (dr.type != DamageReceiver.Type.Enemy) continue;
+                if (!dr.gameObject.activeInHierarchy) continue;
                 var go = dr.gameObject;
                 if (IsExcludedName(go.name)) continue;
 
@@ -80,10 +104,8 @@ namespace CupheadOnline.Sync
                 byte  phase = GetEnemyPhase(dr);
                 int   hash  = 0;
                 var   anim  = go.GetComponentInChildren<Animator>();
-                if (anim != null)
+                if (anim != null && anim.isActiveAndEnabled)
                     hash = anim.GetCurrentAnimatorStateInfo(0).fullPathHash;
-
-                bool priority = bossPriorityMode || IsBossPriority(go, phase, enemyCount);
 
                 var pkt = new EnemyStatePacket
                 {
@@ -96,7 +118,9 @@ namespace CupheadOnline.Sync
                     Tick       = MultiplayerSession.Tick,
                 };
 
-                bool reliable = priority && ShouldSendReliableDelta(pkt);
+                // Positions stream unreliably (a lost one is superseded ~30 ms
+                // later). Only first sight and phase changes must arrive.
+                bool reliable = ShouldSendReliableDelta(pkt);
                 Plugin.Net.SendEnemyState(ref pkt, reliable);
                 _lastSent[pkt.InstanceId] = new EnemySnapshotState
                 {
@@ -170,21 +194,42 @@ namespace CupheadOnline.Sync
 
             var go = dr.gameObject;
 
-            // ── Position: gentle lerp to avoid visual snap ────────────────────
+            // ── Position: lerp; snap only on real teleports ────────────────────
+            // Bosses move hundreds of units per second and the host's position
+            // is a one-way trip old, so small gaps are expected. The old 6-unit
+            // snap yanked enemies back to stale positions on nearly every packet.
             var targetPos = new Vector3(pkt.PosX, pkt.PosY, go.transform.position.z);
             float distance = Vector3.Distance(go.transform.position, targetPos);
-            go.transform.position = distance > 6f
+            go.transform.position = distance > ENEMY_SNAP_DISTANCE
                 ? targetPos
                 : Vector3.Lerp(go.transform.position, targetPos, 0.3f);
 
-            // ── Animation: play the host's animator state ─────────────────────
+            // ── Animation: adopt the host's state only on lasting disagreement ─
             var anim = go.GetComponentInChildren<Animator>();
-            if (anim != null && pkt.AnimHash != 0)
+            if (anim == null || !anim.isActiveAndEnabled || pkt.AnimHash == 0)
+                return;
+
+            int localHash = anim.GetCurrentAnimatorStateInfo(0).fullPathHash;
+            if (localHash == pkt.AnimHash)
             {
-                int localHash = anim.GetCurrentAnimatorStateInfo(0).fullPathHash;
-                if (localHash != pkt.AnimHash)
-                    anim.Play(pkt.AnimHash, 0, -1f);
+                _animMismatchSince.Remove(pkt.InstanceId);
+                return;
             }
+
+            float now = Time.unscaledTime;
+            float since;
+            if (!_animMismatchSince.TryGetValue(pkt.InstanceId, out since))
+            {
+                _animMismatchSince[pkt.InstanceId] = now;
+                return;
+            }
+
+            if (now - since < ANIM_MISMATCH_GRACE)
+                return;
+
+            _animMismatchSince.Remove(pkt.InstanceId);
+            if (anim.HasState(0, pkt.AnimHash))
+                anim.Play(pkt.AnimHash, 0);
         }
 
         static void ApplyLevelBossHp(EnemyStatePacket pkt)
@@ -282,10 +327,13 @@ namespace CupheadOnline.Sync
 
         public static void Reset()
         {
-            _broadcastCounter = 0;
+            _nextBroadcastAt = 0f;
             _recoveryBurstFrames = 0;
+            _cachedReceivers = new DamageReceiver[0];
+            _nextReceiverScanAt = 0f;
             _lastSent.Clear();
             _lastReceivedTicks.Clear();
+            _animMismatchSince.Clear();
             ResetBossPropertiesCache();
         }
 
@@ -410,39 +458,7 @@ namespace CupheadOnline.Sync
             if (!_lastSent.TryGetValue(pkt.InstanceId, out previous))
                 return true;
 
-            if (previous.Phase != pkt.Phase)
-                return true;
-
-            var prevPos = previous.Position;
-            float dx = prevPos.x - pkt.PosX;
-            float dy = prevPos.y - pkt.PosY;
-            return (dx * dx + dy * dy) >= 16f;
-        }
-
-        static bool IsBossPriority(GameObject go, byte phase, int enemyCount)
-        {
-            if (phase > 0)
-                return true;
-            if (enemyCount <= 3)
-                return true;
-            if (go == null)
-                return false;
-
-            string name = go.name.ToLowerInvariant();
-            return name.Contains("boss")
-                || name.Contains("baroness")
-                || name.Contains("dragon")
-                || name.Contains("robot")
-                || name.Contains("saltbaker")
-                || name.Contains("dice")
-                || name.Contains("devil")
-                || name.Contains("pirate")
-                || name.Contains("train")
-                || name.Contains("genie")
-                || name.Contains("clown")
-                || name.Contains("flower")
-                || name.Contains("blimp")
-                || name.Contains("bee");
+            return previous.Phase != pkt.Phase;
         }
     }
 }

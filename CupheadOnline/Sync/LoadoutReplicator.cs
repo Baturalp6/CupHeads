@@ -146,6 +146,9 @@ namespace CupheadOnline.Sync
                 if (PlayerData.Data == null || PlayerData.Data.Loadouts == null)
                     return;
 
+                // This slot belongs to the remote player for the session; keep
+                // the owner's real loadout for the save file.
+                SaveGuard.RememberLoadout(id);
                 var loadout = PlayerData.Data.Loadouts.GetPlayerLoadout(id);
                 DecodedLoadout decoded = Decode(pkt, chaliceBlocked: false);
                 loadout.primaryWeapon = decoded.PrimaryWeapon;

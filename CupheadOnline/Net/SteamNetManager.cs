@@ -580,11 +580,21 @@ namespace CupheadOnline.Net
         {
             if (!_steamReady) return;
 
-            if (_lobbyId != CSteamID.Nil && !IsLobbyMember(req.m_steamIDRemote))
+            if (_lobbyId == CSteamID.Nil || !IsLobbyMember(req.m_steamIDRemote))
             {
-                Plugin.Log.LogWarning("[SteamNet] Rejected P2P from non-lobby peer.");
+                Plugin.Log.LogWarning("[SteamNet] Rejected P2P from a peer outside our lobby.");
                 return;
             }
+
+            // A guest only ever talks to the lobby owner (the host). Accepting
+            // other queued members would silently retarget all guest traffic.
+            if (!_isHost && req.m_steamIDRemote != SteamMatchmaking.GetLobbyOwner(_lobbyId))
+            {
+                Plugin.Log.LogWarning("[SteamNet] Rejected P2P from non-host lobby member "
+                    + FriendName(req.m_steamIDRemote) + ".");
+                return;
+            }
+
             SteamNetworking.AcceptP2PSessionWithUser(req.m_steamIDRemote);
             if (_isHost)
             {
@@ -736,10 +746,10 @@ namespace CupheadOnline.Net
                     : "Connected.\nWaiting for the host to choose a save slot.");
 
             ConnectionHUD.Show("Connected - " + (_isHost ? BuildCurrentPeerSummary() : name));
-            SessionSync.OnConnected(_isHost);
 
-            if (_isHost)
-                SessionSync.BroadcastRecoveryBundle("Peer connected or reconnected.");
+            // SessionSync.OnConnected already sends the host's recovery bundle;
+            // sending a second one here made the guest load the level twice.
+            SessionSync.OnConnected(_isHost);
         }
 
         // ── Disconnect / failure ──────────────────────────────────────────────
@@ -1012,10 +1022,29 @@ namespace CupheadOnline.Net
                 }
                 uint     read;
                 CSteamID sender;
-                if (SteamNetworking.ReadP2PPacket(_recvBuf, size, out read, out sender) && read > 0)
+                if (!SteamNetworking.ReadP2PPacket(_recvBuf, size, out read, out sender) || read == 0)
+                    continue;
+
+                // A truncated/malformed packet or a throwing handler must only
+                // cost that one packet, not the rest of the queue and frame.
+                try
+                {
                     ProcessPacket(_recvBuf, (int)read, sender);
+                }
+                catch (Exception ex)
+                {
+                    float now = Time.realtimeSinceStartup;
+                    if (now - _lastPacketErrorLogAt > 2f)
+                    {
+                        _lastPacketErrorLogAt = now;
+                        Plugin.Log.LogWarning("[SteamNet] Dropped packet type " + _recvBuf[0]
+                            + " from " + FriendName(sender) + ": " + ex.GetType().Name + " " + ex.Message);
+                    }
+                }
             }
         }
+
+        float _lastPacketErrorLogAt = -10f;
 
         bool IsConnectedHostPeer(CSteamID sender)
         {
@@ -1175,7 +1204,9 @@ namespace CupheadOnline.Net
                 ExtraParticipantTracker.Apply(extraState);
             }
 
-            if (ConnectedPeerCount <= 1)
+            // Relaying the primary guest as PlayerTwo would land on every extra
+            // participant's *own* PlayerTwo slot.
+            if (ConnectedPeerCount <= 1 || sessionParticipantId <= (byte)PlayerId.PlayerTwo)
                 return;
 
             incoming.PlayerId = sessionParticipantId;
@@ -1197,7 +1228,7 @@ namespace CupheadOnline.Net
             incoming.PlayerId = sessionParticipantId;
             RemoteWeaponReplicator.Apply(incoming);
 
-            if (ConnectedPeerCount <= 1)
+            if (ConnectedPeerCount <= 1 || sessionParticipantId <= (byte)PlayerId.PlayerTwo)
                 return;
 
             RelayParticipantWeaponEvent(incoming, sender);
@@ -1218,7 +1249,7 @@ namespace CupheadOnline.Net
             incoming.ParticipantId = sessionParticipantId;
             ParticipantStatusTracker.Apply(incoming);
 
-            if (ConnectedPeerCount <= 1)
+            if (ConnectedPeerCount <= 1 || sessionParticipantId <= (byte)PlayerId.PlayerTwo)
                 return;
 
             RelayParticipantPlayerStatus(incoming, sender);
@@ -1405,7 +1436,19 @@ namespace CupheadOnline.Net
 
         // ── Send helpers ──────────────────────────────────────────────────────
 
-        public void SendPlayerState (ref PlayerStatePacket  p) => Send(PacketType.PlayerState,  ref p, false);
+        public void SendPlayerState(ref PlayerStatePacket p)
+        {
+            // Every guest build believes it owns PlayerTwo. The host's PlayerTwo
+            // snapshot is the primary guest's authority correction, so extra
+            // participants must not receive it as "their own" body.
+            if (_isHost && p.PlayerId == (byte)PlayerId.PlayerTwo)
+            {
+                SendToPeer(PacketType.PlayerState, ref p, false, _peerId);
+                return;
+            }
+
+            Send(PacketType.PlayerState, ref p, false);
+        }
         public void SendInputFrame  (ref InputFramePacket   p) => Send(PacketType.InputFrame,   ref p, false);
         public void SendEnemyState  (ref EnemyStatePacket   p, bool reliable = false) => Send(PacketType.EnemyState,   ref p, reliable);
         public void SendWeaponEvent (ref WeaponEventPacket  p) => Send(PacketType.WeaponEvent,  ref p, true);

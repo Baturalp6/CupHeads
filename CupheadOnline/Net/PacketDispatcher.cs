@@ -13,6 +13,18 @@ namespace CupheadOnline.Net
     {
         public static void Dispatch(PacketType type, BinaryReader r, byte sourceParticipantId)
         {
+            // Extra (3rd+) lobby participants run a normal guest build, so they
+            // claim PlayerTwo in their packets. Only their input stream is safe
+            // to accept; everything else would hijack the primary guest's slot
+            // (loadout, ready gate, save profile, resync requests).
+            if (MultiplayerSession.IsHost
+             && sourceParticipantId != byte.MaxValue
+             && sourceParticipantId > (byte)PlayerId.PlayerTwo
+             && type != PacketType.InputFrame)
+            {
+                return;
+            }
+
             switch (type)
             {
                 // ── Per-frame unreliable ──────────────────────────────────────
@@ -91,6 +103,9 @@ namespace CupheadOnline.Net
 
                 case PacketType.SceneChange:
                 {
+                    // Scene changes are host → guest only; a guest must never
+                    // be able to reseed the host's RNG.
+                    if (MultiplayerSession.IsHost) break;
                     var pkt = new SceneChangePacket();
                     pkt.Read(r);
                     if (!System.Enum.IsDefined(typeof(Levels), pkt.LevelEnum))
@@ -100,16 +115,14 @@ namespace CupheadOnline.Net
                     }
 
                     RngSync.SetSeed(pkt.RngSeed);
-                    if (!MultiplayerSession.IsHost)
-                    {
-                        SceneSyncState.AllowNextClientLevelLoad();
-                        SceneLoader.LoadLevel((Levels)pkt.LevelEnum, SceneLoader.Transition.Iris);
-                    }
+                    SceneSyncState.AllowNextClientLevelLoad();
+                    SceneLoader.LoadLevel((Levels)pkt.LevelEnum, SceneLoader.Transition.Iris);
                     break;
                 }
 
                 case PacketType.MenuSceneChange:
                 {
+                    if (MultiplayerSession.IsHost) break;
                     var pkt = new MenuSceneChangePacket();
                     pkt.Read(r);
                     if (!System.Enum.IsDefined(typeof(Scenes), pkt.SceneEnum))
@@ -119,16 +132,13 @@ namespace CupheadOnline.Net
                     }
 
                     RngSync.SetSeed(pkt.RngSeed);
-                    if (!MultiplayerSession.IsHost)
-                    {
-                        SceneSyncState.AllowNextClientSceneLoad();
-                        SceneLoader.LoadScene(
-                            (Scenes)pkt.SceneEnum,
-                            (SceneLoader.Transition)pkt.TransitionStart,
-                            (SceneLoader.Transition)pkt.TransitionEnd,
-                            (SceneLoader.Icon)pkt.Icon,
-                            null);
-                    }
+                    SceneSyncState.AllowNextClientSceneLoad();
+                    SceneLoader.LoadScene(
+                        (Scenes)pkt.SceneEnum,
+                        (SceneLoader.Transition)pkt.TransitionStart,
+                        (SceneLoader.Transition)pkt.TransitionEnd,
+                        (SceneLoader.Icon)pkt.Icon,
+                        null);
                     break;
                 }
 
@@ -195,10 +205,9 @@ namespace CupheadOnline.Net
                     if (MultiplayerSession.IsHost) break;
                     var pkt = new SessionStartPacket();
                     pkt.Read(r);
-                    SessionSync.ApplySessionStart(pkt);
-                    RngSync.SetSeed(pkt.RngSeed);
                     if (!MultiplayerSession.IsActive || MultiplayerSession.IsHost)
                         MultiplayerSession.StartAsClient();
+                    SessionSync.ApplySessionStart(pkt);
                     if (pkt.IsInLevel && pkt.CurrentLevel >= 0)
                     {
                         if (!System.Enum.IsDefined(typeof(Levels), pkt.CurrentLevel))
@@ -207,6 +216,14 @@ namespace CupheadOnline.Net
                             break;
                         }
 
+                        // Session-start doubles as the recovery bundle. Only
+                        // join the host's level when we are not already in it
+                        // (or loading into something) - reloading a running
+                        // fight on every resync restarted the guest's level.
+                        if (IsInOrLoadingLevel((Levels)pkt.CurrentLevel))
+                            break;
+
+                        RngSync.SetSeed(pkt.RngSeed);
                         SceneSyncState.AllowNextClientLevelLoad();
                         SceneLoader.LoadLevel((Levels)pkt.CurrentLevel, SceneLoader.Transition.Iris);
                     }
@@ -260,6 +277,21 @@ namespace CupheadOnline.Net
                 default:
                     Plugin.Log.LogWarning("[Dispatcher] Unknown packet type: " + type);
                     break;
+            }
+        }
+
+        internal static bool IsInOrLoadingLevel(Levels level)
+        {
+            try
+            {
+                if (SceneLoader.CurrentlyLoading)
+                    return true;
+
+                return Level.Current != null && Level.Current.CurrentLevel == level;
+            }
+            catch
+            {
+                return false;
             }
         }
     }

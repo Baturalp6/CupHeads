@@ -88,6 +88,7 @@ namespace CupheadOnline.Patches
             if (!MultiplayerSession.IsHost) return true;
             if (Plugin.Net == null || !Plugin.Net.IsConnected) return true;
 
+            LevelReadyGate.OnHostLevelLoadStarted();
             SceneSyncState.SuppressMenuSceneBroadcast = true;
 
             var pkt = new SceneChangePacket

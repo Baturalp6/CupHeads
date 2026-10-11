@@ -217,7 +217,6 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerManagerCurrentPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerManagerCountPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerManagerGetAllPlayersPatch));
-            PatchTracked(harmony, registeredPatchTypes, typeof(PlayerManagerBothPlayersActivePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(CupheadLevelCameraPathPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlatformingLevelEnemySpawnerPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlatformingLevelPitMoveTriggerPatch));
@@ -276,6 +275,9 @@ namespace CupheadOnline
             // Deterministic RNG
             PatchTracked(harmony, registeredPatchTypes, typeof(RandPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(RandIntPatch));
+
+            // Keep session-only overrides out of the real save files
+            PatchTracked(harmony, registeredPatchTypes, typeof(SaveGuard.PlayerDataSavePatch));
 
             AuditPatchCoverage(registeredPatchTypes);
 
@@ -358,33 +360,72 @@ namespace CupheadOnline
             }
         }
 
+        // Each subsystem runs in isolation: one throwing tick must not starve
+        // every system after it (networking, sync, UI) for the rest of the frame.
+        static readonly KeyValuePair<string, Action>[] UpdateSteps =
+        {
+            new KeyValuePair<string, Action>("MainThreadQueue", MainThreadQueue.Drain),
+            new KeyValuePair<string, Action>("Net.Poll", () => { if (Net != null) Net.Poll(); }),
+            new KeyValuePair<string, Action>("MultiplayerState", MultiplayerSession.EnsureCupheadMultiplayerState),
+            new KeyValuePair<string, Action>("LocalDevSession", LocalDevSession.Update),
+            new KeyValuePair<string, Action>("InputFramePump", ClientInputFramePump.Update),
+            new KeyValuePair<string, Action>("LoadoutReplicator", LoadoutReplicator.Update),
+            new KeyValuePair<string, Action>("EnemySync", EnemySyncManager.HostTick),
+            new KeyValuePair<string, Action>("ExtraAvatars", ExtraRemoteAvatarManager.Update),
+            new KeyValuePair<string, Action>("ExtraDamageBridge", ExtraParticipantDamageBridge.Update),
+            new KeyValuePair<string, Action>("ExtraTracker", ExtraParticipantTracker.Update),
+            new KeyValuePair<string, Action>("ExtraReviveVisuals", ExtraParticipantReviveVisuals.Update),
+            new KeyValuePair<string, Action>("PlayerColorSync", PlayerColorSync.Update),
+            new KeyValuePair<string, Action>("QoLHotkeys", QoLHotkeys.Tick),
+            new KeyValuePair<string, Action>("BossHealthScaler", BossHealthScaler.Update),
+            new KeyValuePair<string, Action>("BossHealthBars", BossHealthBarOverlay.Tick),
+            new KeyValuePair<string, Action>("BattleAssistHud", BattleAssistHud.Tick),
+            new KeyValuePair<string, Action>("SessionSync", SessionSync.Update),
+            new KeyValuePair<string, Action>("LevelReadyGate", LevelReadyGate.Update),
+            new KeyValuePair<string, Action>("DesyncSentinel", DesyncSentinel.Update),
+            new KeyValuePair<string, Action>("RemoteShotTracer", RemoteShotTracer.Update),
+            new KeyValuePair<string, Action>("GhostDrift", GhostDriftController.Update),
+            new KeyValuePair<string, Action>("CommWheel", CommWheel.Tick),
+            new KeyValuePair<string, Action>("WinStatsCard", WinStatsCard.Tick),
+            new KeyValuePair<string, Action>("PatchHealthNotice", PatchHealthNotice.Tick),
+            new KeyValuePair<string, Action>("SessionPausePanel", SessionPausePanel.Ensure),
+        };
+
+        static readonly Dictionary<string, float> _lastStepErrorLogAt = new Dictionary<string, float>();
+
         void Update()
         {
-            MainThreadQueue.Drain();
-            Net?.Poll();
-            MultiplayerSession.EnsureCupheadMultiplayerState();
-            LocalDevSession.Update();
-            ClientInputFramePump.Update();
-            LoadoutReplicator.Update();
-            EnemySyncManager.HostTick();
-            ExtraRemoteAvatarManager.Update();
-            ExtraParticipantDamageBridge.Update();
-            ExtraParticipantTracker.Update();
-            ExtraParticipantReviveVisuals.Update();
-            PlayerColorSync.Update();
-            QoLHotkeys.Tick();
-            BossHealthScaler.Update();
-            BossHealthBarOverlay.Tick();
-            BattleAssistHud.Tick();
-            SessionSync.Update();
-            LevelReadyGate.Update();
-            DesyncSentinel.Update();
-            RemoteShotTracer.Update();
-            GhostDriftController.Update();
-            CommWheel.Tick();
-            WinStatsCard.Tick();
-            PatchHealthNotice.Tick();
-            SessionPausePanel.Ensure();
+            for (int i = 0; i < UpdateSteps.Length; i++)
+            {
+                try
+                {
+                    UpdateSteps[i].Value();
+                }
+                catch (Exception ex)
+                {
+                    LogThrottledStepError(UpdateSteps[i].Key, ex);
+                }
+            }
+        }
+
+        void FixedUpdate()
+        {
+            // One shared simulation tick per physics step, independent of
+            // whether the local player is alive. Packet ordering on the peer
+            // relies on this counter always moving forward.
+            if (MultiplayerSession.IsActive)
+                MultiplayerSession.IncrementTick();
+        }
+
+        static void LogThrottledStepError(string step, Exception ex)
+        {
+            float now = Time.realtimeSinceStartup;
+            float last;
+            if (_lastStepErrorLogAt.TryGetValue(step, out last) && now - last < 5f)
+                return;
+
+            _lastStepErrorLogAt[step] = now;
+            Log.LogError("[Plugin] " + step + " threw: " + ex);
         }
 
         void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -481,6 +522,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.4.0";
+        public const string VERSION = "1.4.1";
     }
 }

@@ -15,8 +15,18 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(PlayerDamageReceiver), nameof(PlayerDamageReceiver.TakeDamage))]
     public static class PlayerDamagePatch
     {
-        static bool Prefix(PlayerDamageReceiver __instance, DamageDealer.DamageInfo info)
+        public struct HitState
         {
+            public bool Valid;
+            public int Health;
+            public float StoneTime;
+            public bool ChaliceShield;
+        }
+
+        static bool Prefix(PlayerDamageReceiver __instance, DamageDealer.DamageInfo info, ref HitState __state)
+        {
+            __state = CaptureHitState(__instance);
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (LocalDevSession.IsActive)
@@ -45,7 +55,7 @@ namespace CupheadOnline.Patches
             return true;
         }
 
-        static void Postfix(PlayerDamageReceiver __instance, DamageDealer.DamageInfo info)
+        static void Postfix(PlayerDamageReceiver __instance, DamageDealer.DamageInfo info, HitState __state)
         {
             if (!MultiplayerSession.IsActive)
                 return;
@@ -56,6 +66,12 @@ namespace CupheadOnline.Patches
             if (info.damage <= 0f && info.stoneTime <= 0f)
                 return;
             if (DamageAuthority.IsApplyingAuthorizedDamage)
+                return;
+
+            // TakeDamage silently ignores hits during invulnerability frames,
+            // super invincibility, etc. Only replicate hits that actually
+            // changed the player; otherwise the peer applies phantom damage.
+            if (!HitLanded(__instance, __state))
                 return;
 
             var player = __instance.GetComponent<AbstractPlayerController>();
@@ -102,6 +118,44 @@ namespace CupheadOnline.Patches
                 };
                 Plugin.Net.SendDamageEvent(ref pkt);
             }
+        }
+
+        static HitState CaptureHitState(PlayerDamageReceiver receiver)
+        {
+            var stats = GetStats(receiver);
+            if (stats == null)
+                return default(HitState);
+
+            return new HitState
+            {
+                Valid = true,
+                Health = stats.Health,
+                StoneTime = stats.StoneTime,
+                ChaliceShield = stats.ChaliceShieldOn,
+            };
+        }
+
+        static bool HitLanded(PlayerDamageReceiver receiver, HitState before)
+        {
+            if (!before.Valid)
+                return false;
+
+            var stats = GetStats(receiver);
+            if (stats == null)
+                return false;
+
+            return stats.Health < before.Health
+                || stats.StoneTime > before.StoneTime + 0.0001f
+                || (before.ChaliceShield && !stats.ChaliceShieldOn);
+        }
+
+        static PlayerStatsManager GetStats(PlayerDamageReceiver receiver)
+        {
+            if (receiver == null)
+                return null;
+
+            var player = receiver.GetComponent<AbstractPlayerController>();
+            return player != null ? player.stats : null;
         }
     }
 }

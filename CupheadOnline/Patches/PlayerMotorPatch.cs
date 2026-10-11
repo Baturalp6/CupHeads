@@ -46,7 +46,6 @@ namespace CupheadOnline.Patches
                 return false;
             }
 
-            MultiplayerSession.IncrementTick();
             return true;
         }
 
@@ -132,51 +131,63 @@ namespace CupheadOnline.Patches
                 target,
                 Mathf.Min(1f, 20f * Time.fixedDeltaTime));
 
-            var t = Traverse.Create(motor);
-            t.Property("LookDirection").SetValue(new Trilean2(s.LookX, s.LookY));
-            t.Property("TrueLookDirection").SetValue(new Trilean2(s.LookX, s.LookY));
+            // The setters are private; MotorSetters binds them once instead of
+            // doing a Traverse/reflection lookup on every physics tick.
+            var look = new Trilean2(s.LookX, s.LookY);
+            MotorSetters.Set(MotorSetters.LookDirection, motor, look);
+            MotorSetters.Set(MotorSetters.TrueLookDirection, motor, look);
 
             InputFramePacket input;
+            var move = new Trilean2(0, 0);
             if (RemoteInputDriver.TryGetCurrent(participantId, out input))
             {
-                t.Property("MoveDirection").SetValue(new Trilean2(
+                move = new Trilean2(
                     input.AxisX > 0.38f ? 1 : input.AxisX < -0.38f ? -1 : 0,
-                    input.AxisY > 0.38f ? 1 : input.AxisY < -0.38f ? -1 : 0));
+                    input.AxisY > 0.38f ? 1 : input.AxisY < -0.38f ? -1 : 0);
             }
-            else
-            {
-                t.Property("MoveDirection").SetValue(new Trilean2(0, 0));
-            }
+            MotorSetters.Set(MotorSetters.MoveDirection, motor, move);
 
-            // Only Grounded / Locked / GravityReversed have setters. Dashing,
-            // Ducking, IsHit, and IsUsingSuperOrEx are computed getters backed by
-            // the motor's internal managers; their visual effect on the proxy is
-            // driven through the flag-transition events below instead.
-            t.Property("Grounded").SetValue(s.Grounded);
-            t.Property("Locked").SetValue(false);
-            t.Property("GravityReversed").SetValue(s.GravReversed);
+            // Dashing, Ducking, IsHit and IsUsingSuperOrEx are computed getters
+            // backed by the motor's internal managers; their visual effect on the
+            // proxy is driven through the flag-transition events below instead.
+            MotorSetters.Set(MotorSetters.Grounded, motor, s.Grounded);
+            MotorSetters.Set(MotorSetters.Locked, motor, false);
+            MotorSetters.Set(MotorSetters.GravityReversed, motor, s.GravReversed);
 
             RemotePlayer.UpdateStateTransitions(participantId, motor, s);
         }
 
+        // Fastest regular player movement (dash speed in LevelPlayerMotor.Properties).
+        const float MaxPlayerSpeed = 1100f;
+        const float CorrectionBaseTolerance = 32f;
+        const float CorrectionSnapDistance = 400f;
+        const float CorrectionBlend = 0.15f;
+        const float MaxSnapshotAge = 0.75f;
+
+        /// <summary>
+        /// The host's view of the guest's own body is at least one round trip
+        /// old, so differences up to "distance travelable in that time" are
+        /// expected and must not be corrected. Each host snapshot is applied at
+        /// most once, and stale snapshots are ignored entirely.
+        /// </summary>
         static void ApplyAuthoritativeCorrection(LevelPlayerMotor motor, PlayerId playerId)
         {
             PlayerStatePacket snapshot;
-            if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+            if (!RemotePlayer.TryConsumeLocalAuthoritySnapshot(playerId, MaxSnapshotAge, out snapshot))
                 return;
 
             var target = new Vector3(snapshot.PosX, snapshot.PosY, motor.transform.position.z);
             float distance = Vector2.Distance(motor.transform.position, target);
-            float deadZone = Plugin.LatencyFriendlyDamage ? 0.85f : 0.35f;
-            float snapDistance = Plugin.LatencyFriendlyDamage ? 8f : 4f;
-            float blend = Plugin.LatencyFriendlyDamage ? 0.08f : 0.18f;
 
-            if (distance < deadZone)
+            float rttSeconds = Plugin.Net != null ? Mathf.Max(0, Plugin.Net.Latency) / 1000f : 0f;
+            float tolerance = CorrectionBaseTolerance + MaxPlayerSpeed * (rttSeconds + 0.05f);
+
+            if (distance <= tolerance)
                 return;
 
-            motor.transform.position = distance > snapDistance
+            motor.transform.position = distance > CorrectionSnapDistance
                 ? target
-                : Vector3.Lerp(motor.transform.position, target, blend);
+                : Vector3.Lerp(motor.transform.position, target, CorrectionBlend);
         }
     }
 

@@ -77,11 +77,7 @@ namespace CupheadOnline.Patches
                 return true;
 
             if (!MultiplayerSession.IsNetworkControlledPlayer(player.id))
-            {
-                if (MultiplayerSession.IsLocalPlayer(player.id))
-                    MultiplayerSession.IncrementTick();
                 return true;
-            }
 
             RemoteInputDriver.Tick(player.id);
             if (MultiplayerSession.IsHost && player.id <= PlayerId.PlayerTwo)

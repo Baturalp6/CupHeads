@@ -91,7 +91,7 @@ namespace CupheadOnline.Sync
                         hash *= 16777619u;
                     }
 
-                    hash ^= (uint)t.GetSiblingIndex();
+                    hash ^= (uint)GetSameNameOrdinal(t);
                     hash *= 16777619u;
                     t = t.parent;
                 }
@@ -99,6 +99,43 @@ namespace CupheadOnline.Sync
                 int result = (int)hash;
                 return result == 0 ? 1 : result;
             }
+        }
+
+        /// <summary>
+        /// Position among siblings that share this object's name. The raw sibling
+        /// index also counts unrelated objects (e.g. player bullets spawned at the
+        /// scene root), which differ between peers and made IDs mismatch.
+        /// </summary>
+        static int GetSameNameOrdinal(Transform t)
+        {
+            string name = t.name;
+            int ordinal = 0;
+
+            var parent = t.parent;
+            if (parent != null)
+            {
+                int index = t.GetSiblingIndex();
+                for (int i = 0; i < index; i++)
+                {
+                    if (parent.GetChild(i).name == name)
+                        ordinal++;
+                }
+                return ordinal;
+            }
+
+            GameObject[] roots;
+            try { roots = t.gameObject.scene.GetRootGameObjects(); }
+            catch { return 0; }
+
+            for (int i = 0; i < roots.Length; i++)
+            {
+                var root = roots[i].transform;
+                if (root == t)
+                    break;
+                if (root.name == name)
+                    ordinal++;
+            }
+            return ordinal;
         }
 
         static void Rebuild()

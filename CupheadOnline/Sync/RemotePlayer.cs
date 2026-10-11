@@ -49,6 +49,10 @@ namespace CupheadOnline.Sync
             new Dictionary<byte, PlayerStatePacket>(2);
         static readonly Dictionary<byte, uint> _localAuthorityTicks =
             new Dictionary<byte, uint>(2);
+        static readonly Dictionary<byte, float> _localAuthorityReceivedAt =
+            new Dictionary<byte, float>(2);
+        static readonly HashSet<byte> _localAuthorityConsumed =
+            new HashSet<byte>();
         static readonly HashSet<string> _failedEvents =
             new HashSet<string>();
 
@@ -151,6 +155,31 @@ namespace CupheadOnline.Sync
         }
 
         /// <summary>
+        /// Returns the newest host snapshot of a locally-owned body exactly once,
+        /// and only while it is younger than <paramref name="maxAgeSeconds"/>.
+        /// </summary>
+        public static bool TryConsumeLocalAuthoritySnapshot(PlayerId playerId, float maxAgeSeconds, out PlayerStatePacket snapshot)
+        {
+            byte id = (byte)playerId;
+            snapshot = default(PlayerStatePacket);
+
+            if (_localAuthorityConsumed.Contains(id))
+                return false;
+            if (!_localAuthoritySnapshots.TryGetValue(id, out snapshot))
+                return false;
+
+            float receivedAt;
+            if (!_localAuthorityReceivedAt.TryGetValue(id, out receivedAt)
+             || Time.unscaledTime - receivedAt > maxAgeSeconds)
+            {
+                return false;
+            }
+
+            _localAuthorityConsumed.Add(id);
+            return true;
+        }
+
+        /// <summary>
         /// Detects transitions in the proxy player's motor flags and raises the
         /// corresponding events on LevelPlayerMotor so animation reacts normally.
         /// </summary>
@@ -185,14 +214,14 @@ namespace CupheadOnline.Sync
             _slotStates.Clear();
             _localAuthoritySnapshots.Clear();
             _localAuthorityTicks.Clear();
+            _localAuthorityReceivedAt.Clear();
+            _localAuthorityConsumed.Clear();
             _failedEvents.Clear();
         }
 
         public static void Reset(PlayerId playerId)
         {
-            _slotStates.Remove((byte)playerId);
-            _localAuthoritySnapshots.Remove((byte)playerId);
-            _localAuthorityTicks.Remove((byte)playerId);
+            Reset((byte)playerId);
         }
 
         public static void Reset(byte participantId)
@@ -200,6 +229,8 @@ namespace CupheadOnline.Sync
             _slotStates.Remove(participantId);
             _localAuthoritySnapshots.Remove(participantId);
             _localAuthorityTicks.Remove(participantId);
+            _localAuthorityReceivedAt.Remove(participantId);
+            _localAuthorityConsumed.Remove(participantId);
         }
 
         static RemotePlayerSlotState GetOrCreateState(PlayerId playerId)
@@ -229,6 +260,8 @@ namespace CupheadOnline.Sync
 
             _localAuthorityTicks[pkt.PlayerId] = pkt.Tick;
             _localAuthoritySnapshots[pkt.PlayerId] = pkt;
+            _localAuthorityReceivedAt[pkt.PlayerId] = Time.unscaledTime;
+            _localAuthorityConsumed.Remove(pkt.PlayerId);
         }
 
         static void RaiseEvent(LevelPlayerMotor motor, FieldInfo fi)

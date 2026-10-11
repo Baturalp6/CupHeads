@@ -5,15 +5,15 @@ using CupheadOnline.Net;
 namespace CupheadOnline.Sync
 {
     /// <summary>
-    /// Applies weapon events received from the network onto the remote player's
-    /// weapon manager, so the correct visual / audio effects play locally.
+    /// Applies weapon events received from the network onto the remote player.
     ///
-    /// We intentionally do NOT spawn actual projectiles on the client for the remote
-    /// player — the host's projectiles are replicated via EnemySyncManager's enemy-state
-    /// logic, and the visual muzzle flash / animation is driven here.
-    ///
-    /// Rationale: spawning physics-enabled projectiles on both sides would double-count
-    /// damage. The host is the only source of truth for collision.
+    /// For the two built-in slots the proxy's own LevelPlayerWeaponManager already
+    /// fires real projectiles: it reads Shoot/Super/Switch through Rewired, and the
+    /// input router feeds it the remote player's InputFrame. Adding tracers or a
+    /// forced "Shooting" animator flag on top only doubled the visuals (and the flag
+    /// was never cleared). Here we only align aim, trigger one-shot animations and
+    /// apply explicit weapon switches. Extra participants have no weapon manager
+    /// and keep their visual-only path.
     /// </summary>
     public static class RemoteWeaponReplicator
     {
@@ -54,13 +54,12 @@ namespace CupheadOnline.Sync
 
             if (player == null) return;
 
-            // Set look direction so the muzzle flash appears in the right direction
+            // Set look direction so the shot leaves in the right direction
             if (player.motor != null)
             {
-                var t = HarmonyLib.Traverse.Create(player.motor);
                 var dir = new Trilean2(pkt.AimX, pkt.AimY);
-                t.Property("LookDirection").SetValue(dir);
-                t.Property("TrueLookDirection").SetValue(dir);
+                Patches.MotorSetters.Set(Patches.MotorSetters.LookDirection, player.motor, dir);
+                Patches.MotorSetters.Set(Patches.MotorSetters.TrueLookDirection, player.motor, dir);
             }
 
             var wm = player.weaponManager;
@@ -69,14 +68,12 @@ namespace CupheadOnline.Sync
             switch ((WeaponEventType)pkt.EventType)
             {
                 case WeaponEventType.Fire:
-                    // Raise the fire anim + a visual-only tracer so the shot is readable
-                    TriggerAnimatorParam(player, "Shooting", true);
-                    SpawnTracer(player, pkt);
+                    // The proxy's weapon manager fires the real shot from the
+                    // replicated Shoot input; nothing extra to draw here.
                     break;
 
                 case WeaponEventType.Ex:
                     TriggerAnimatorTrigger(player, "Ex");
-                    SpawnTracer(player, pkt);
                     break;
 
                 case WeaponEventType.Super:
@@ -91,27 +88,6 @@ namespace CupheadOnline.Sync
                     ApplyWeaponSwitch(wm, pkt.WeaponId);
                     break;
             }
-        }
-
-        static void SpawnTracer(LevelPlayerController player, WeaponEventPacket pkt)
-        {
-            // Only where real projectiles are missing: the proxy slot on the
-            // client. The host simulates the guest's weapons for real.
-            if (MultiplayerSession.IsHost)
-                return;
-
-            Vector2 origin;
-            try { origin = player.center; }
-            catch { origin = player.transform.position; }
-
-            RemoteShotTracer.Spawn(origin, new Vector2(pkt.AimX, pkt.AimY));
-        }
-
-        static void TriggerAnimatorParam(LevelPlayerController player, string param, bool value)
-        {
-            var anim = player.animationController?.animator;
-            if (anim == null) return;
-            anim.SetBool(param, value);
         }
 
         static void TriggerAnimatorTrigger(LevelPlayerController player, string trigger)

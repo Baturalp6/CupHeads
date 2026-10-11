@@ -4,7 +4,6 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
-const http = require('http');
 const os = require('os');
 const { execSync } = require('child_process');
 
@@ -39,10 +38,13 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.webContents.on('before-input-event', (_, input) => {
-    if (input.key === 'F12' && input.type === 'keyDown')
-      mainWindow.webContents.toggleDevTools();
-  });
+  // DevTools are a development aid only; shipped installers must not expose them.
+  if (!app.isPackaged) {
+    mainWindow.webContents.on('before-input-event', (_, input) => {
+      if (input.key === 'F12' && input.type === 'keyDown')
+        mainWindow.webContents.toggleDevTools();
+    });
+  }
 
   mainWindow.webContents.on('did-fail-load', (_, code, desc) => {
     console.error('[main] Page failed to load:', code, desc);
@@ -465,8 +467,13 @@ function download(url, dest, onProgress) {
 
     function doGet(requestUrl) {
       armTimeout();
-      const transport = requestUrl.startsWith('https') ? https : http;
-      const req = transport.get(requestUrl, {
+      // Only ever fetch over HTTPS; a redirect must not downgrade the
+      // download of code that ends up inside the game folder.
+      if (!requestUrl.startsWith('https://')) {
+        fail(new Error('Refusing non-HTTPS download URL: ' + requestUrl));
+        return;
+      }
+      const req = https.get(requestUrl, {
         headers: {
           'User-Agent': 'CupHeads-Installer',
           Accept: 'application/octet-stream,*/*',
@@ -474,11 +481,12 @@ function download(url, dest, onProgress) {
       }, (res) => {
         armTimeout();
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
           if (++redirectCount > 10) {
             fail(new Error('Too many redirects while downloading BepInEx.'));
             return;
           }
-          doGet(res.headers.location);
+          doGet(new URL(res.headers.location, requestUrl).toString());
           return;
         }
 
@@ -540,48 +548,11 @@ function getBundledBepInExArchive(arch) {
   return null;
 }
 
-function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, {
-      headers: { 'User-Agent': 'CupHeads-Installer' },
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            resolve(JSON.parse(body));
-          } catch (err) {
-            reject(err);
-          }
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${url}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-  });
-}
-
-async function getLatestBepInExUrl(arch) {
-  try {
-    const release = await fetchJson('https://api.github.com/repos/BepInEx/BepInEx/releases/latest');
-    if (!release || !Array.isArray(release.assets))
-      throw new Error('Invalid release data');
-
-    const assetPattern = arch === 'x64'
-      ? /BepInEx_(?:win_)?x64_.*\.zip$/i
-      : /BepInEx_(?:win_)?x86_.*\.zip$/i;
-
-    const asset = release.assets.find((item) => assetPattern.test(item.name));
-    if (asset && asset.browser_download_url)
-      return asset.browser_download_url;
-  } catch (err) {
-    console.warn('[main] Failed to resolve latest BepInEx release:', err.message);
-  }
-
-  return BEPINEX[arch];
+// The mod is built against the BepInEx 5 plugin API. Always install the pinned
+// release instead of "latest": a future BepInEx 6 release would silently break
+// the mod for everyone running the installer.
+function getPinnedBepInExUrl(arch) {
+  return BEPINEX[arch] || BEPINEX.x64;
 }
 
 ipcMain.on('install', async (event, { cupheadDir, skipBepInEx }) => {
@@ -621,7 +592,7 @@ ipcMain.on('install', async (event, { cupheadDir, skipBepInEx }) => {
           message: 'Using bundled BepInEx repair package from the installer...',
         });
       } else {
-        const zipUrl = await getLatestBepInExUrl(arch);
+        const zipUrl = getPinnedBepInExUrl(arch);
         zipPath = path.join(os.tmpdir(), path.basename(new URL(zipUrl).pathname));
 
         send('step', {

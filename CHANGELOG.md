@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.4.1 - 2026-10-11
+
+Bug-fix release. Wire protocol bumped to 3, so both players need v1.4.1.
+
+### Sync
+
+- One shared simulation tick per physics step. Before, the tick only advanced while the local player was alive, so when the host died every later packet looked "old" and the guest froze enemy sync and got pulled back to a fixed spot.
+- Guest position correction respects ping: differences up to what the player can travel in one round trip are ignored, each host snapshot is applied once, and stale snapshots are dropped. The old 8-unit hard snap rubber-banded the guest constantly.
+- A resync no longer reloads the guest's level when it is already in (or loading) that level, and connecting sends the recovery bundle once instead of twice.
+- The desync sentinel's position tolerance now accounts for ping and the proxy's jitter buffer and needs three strikes. The old 5-unit tolerance fired almost every time the host moved.
+- Scene auto-follow ignores loading phases and never follows into `scene_load_helper`; a mismatch must persist across two snapshots before the guest follows.
+- Button presses are no longer lost: input frames carry a 100 ms press latch, and the receiver accumulates presses until the game reads them (with a short expiry).
+- Damage is only replicated when a hit actually landed (not during i-frames or super invincibility), and authoritative hits clear the local copy's i-frame timer so they are not dropped.
+- Enemy IDs use the ordinal among same-named siblings, so player bullets at the scene root no longer shift them. Enemy snapping threshold raised, animator states are only forced after a lasting mismatch, sends are time-based, and the host scans enemies twice a second instead of every frame.
+- UnityEngine.Random is seeded from the shared level seed at level start on both peers.
+- The level ready gate no longer reuses a previous attempt's "ready" on quick retries.
+- `PlayerManager.BothPlayersActive` is no longer overridden, restoring the game's multiplayer damage rules in the chess fights.
+
+### Safety
+
+- Save guard: the remote player's loadout and the host-mirrored slot data on the guest are swapped back to the owner's real values whenever a save file is written, and restored in memory when the session ends.
+- Extra (3rd+) lobby participants can only send input to the host and no longer receive the primary guest's state as their own.
+- Guests only accept P2P sessions from the lobby owner.
+- Each update subsystem and each incoming packet is isolated, so one exception no longer stalls the whole mod for a frame.
+- Installer: BepInEx is pinned to the tested version instead of "latest", downloads are HTTPS-only, and DevTools are disabled in packaged builds.
+
+### Cleanup
+
+- Removed the unused UDP `NetManager`.
+- Proxy motor properties and Rewired player lookups use cached delegates instead of per-call reflection.
+
 ## v1.4.0 - 2026-07-18
 
 Feature release. The version jumps past the retired "1.3.x" lineage so stale installs can never be confused with current builds again.

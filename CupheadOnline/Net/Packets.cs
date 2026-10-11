@@ -15,7 +15,8 @@ namespace CupheadOnline.Net
     /// </summary>
     public static class NetProtocol
     {
-        public const byte PROTOCOL = 2;
+        // 3: InputFramePacket gained PressLatch (lossless button presses).
+        public const byte PROTOCOL = 3;
     }
 
     public enum PacketType : byte
@@ -116,6 +117,12 @@ namespace CupheadOnline.Net
         public float AxisX;
         public float AxisY;
         public uint Buttons;
+        /// <summary>
+        /// Buttons that were pressed down within the last ~100 ms on the sender.
+        /// Input frames are unreliable, so a short tap whose frames were lost
+        /// still shows up here and the receiver can recover the press.
+        /// </summary>
+        public uint PressLatch;
         public uint Tick;
 
         public bool IsPressed(CupheadButton btn) => (Buttons & (1u << (int)btn)) != 0;
@@ -125,6 +132,7 @@ namespace CupheadOnline.Net
             w.Write(AxisX);
             w.Write(AxisY);
             w.Write(Buttons);
+            w.Write(PressLatch);
             w.Write(Tick);
         }
 
@@ -133,6 +141,7 @@ namespace CupheadOnline.Net
             AxisX = r.ReadSingle();
             AxisY = r.ReadSingle();
             Buttons = r.ReadUInt32();
+            PressLatch = r.ReadUInt32();
             Tick = r.ReadUInt32();
         }
     }

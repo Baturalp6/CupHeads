@@ -22,6 +22,10 @@ namespace CupheadOnline.Sync
             int slot = Mathf.Clamp(pkt.SlotIndex, 0, 2);
             var mapScene = (Scenes)pkt.CurrentMapScene;
 
+            // The guest plays the host's world in its own same-numbered slot;
+            // remember that slot's real values so they are what gets saved.
+            SaveGuard.RememberSlotMeta(slot, mapScene);
+
             PlayerData.CurrentSaveFileIndex = slot;
             PlayerManager.SetPlayerCanSwitch(PlayerId.PlayerOne, false);
             PlayerManager.player1IsMugman = pkt.Player1IsMugman;

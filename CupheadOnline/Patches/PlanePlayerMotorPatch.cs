@@ -24,11 +24,7 @@ namespace CupheadOnline.Patches
                 return true;
 
             if (!MultiplayerSession.IsNetworkControlledPlayer(player.id))
-            {
-                if (MultiplayerSession.IsLocalPlayer(player.id))
-                    MultiplayerSession.IncrementTick();
                 return true;
-            }
 
             RemoteInputDriver.Tick(player.id);
 
@@ -80,7 +76,7 @@ namespace CupheadOnline.Patches
                 target,
                 Mathf.Min(1f, 20f * Time.fixedDeltaTime));
 
-            Traverse.Create(motor).Property("MoveDirection").SetValue(new Trilean2(s.LookX, s.LookY));
+            MotorSetters.Set(MotorSetters.PlaneMoveDirection, motor, new Trilean2(s.LookX, s.LookY));
         }
     }
 }

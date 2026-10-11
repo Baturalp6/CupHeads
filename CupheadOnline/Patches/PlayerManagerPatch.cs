@@ -111,6 +111,8 @@ namespace CupheadOnline.Patches
         static void Prefix()
         {
             MultiplayerSession.EnsureCupheadMultiplayerState();
+            if (MultiplayerSession.IsActive)
+                RngSync.ReseedForLevelStart();
         }
 
         static void Postfix()

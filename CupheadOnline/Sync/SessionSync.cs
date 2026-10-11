@@ -39,6 +39,9 @@ namespace CupheadOnline.Sync
         private static float _lastRecoveryBundleAt = -1f;
         private static float _lastAutoFollowAt = -1f;
         private static string _lastAutoFollowTarget = string.Empty;
+        private static string _followMismatchKey = string.Empty;
+        private static int _followMismatchCount;
+        private const float AUTO_FOLLOW_RETRY_SECONDS = 8f;
         private static int _sceneMismatchStreak;
         private static int _recoveryRequestCount;
         private static int _recoveryBundleCount;
@@ -598,7 +601,7 @@ namespace CupheadOnline.Sync
             sb.AppendLine("Stage: " + GetStageSummary());
             sb.AppendLine("Tracked Save: " + (_hasTrackedSave ? (_trackedSaveSlot + 1).ToString() : "(none)"));
             sb.AppendLine("Save Revision: " + _saveRevision);
-            sb.AppendLine("Ready Gate: disabled");
+            sb.AppendLine("Ready Gate: " + (Plugin.EnableLevelReadyGate ? "enabled" : "disabled"));
             sb.AppendLine("Players: " + MultiplayerSession.ActivePlayerCount);
             sb.AppendLine("Local Character: " + MultiplayerSession.GetLocalCharacterName());
             sb.AppendLine("Remote Character: " + MultiplayerSession.GetRemoteCharacterName());
@@ -855,6 +858,9 @@ namespace CupheadOnline.Sync
             string localScene = GetActiveSceneName();
             bool sceneMismatch = !string.IsNullOrEmpty(snapshot.SceneName)
                               && !string.IsNullOrEmpty(localScene)
+                              && !IsTransitionalScene(snapshot.SceneName)
+                              && !IsTransitionalScene(localScene)
+                              && !IsSceneLoaderBusy()
                               && !string.Equals(snapshot.SceneName, localScene, StringComparison.OrdinalIgnoreCase);
 
             if (sceneMismatch)
@@ -869,15 +875,9 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            uint localTick = MultiplayerSession.Tick;
-            uint hostTick = snapshot.HostTick;
-            uint tickDelta = localTick > hostTick ? localTick - hostTick : hostTick - localTick;
-            if (snapshot.IsInLevel && tickDelta > 240)
-            {
-                _desyncSummary = "Simulation drift detected (" + tickDelta + " ticks). Use REQUEST RESYNC.";
-                _desyncSeverity = SessionIssueSeverity.Warning;
-                return;
-            }
+            // Host and guest tick counters are independent (they start at each
+            // peer's own session start), so comparing them says nothing about
+            // drift. The desync sentinel performs the real state comparison.
 
             if (_lastHostSnapshotAt > 0f && Time.unscaledTime - _lastHostSnapshotAt > 4f)
             {
@@ -935,16 +935,48 @@ namespace CupheadOnline.Sync
             if (string.IsNullOrEmpty(snapshot.SceneName)
              || string.IsNullOrEmpty(localScene)
              || string.Equals(snapshot.SceneName, localScene, StringComparison.OrdinalIgnoreCase))
+            {
+                _followMismatchKey = string.Empty;
+                _followMismatchCount = 0;
                 return;
+            }
+
+            // Either side being mid-load is not a mismatch: the host reports
+            // scene_load_helper while loading, and following *that* scene (or
+            // re-issuing a load while ours is still running) broke transitions.
+            if (IsTransitionalScene(snapshot.SceneName)
+             || IsTransitionalScene(localScene)
+             || IsSceneLoaderBusy())
+            {
+                _followMismatchKey = string.Empty;
+                _followMismatchCount = 0;
+                return;
+            }
 
             string targetKey = snapshot.IsInLevel
                 ? "level:" + snapshot.CurrentLevel
                 : "scene:" + snapshot.SceneName + ":" + snapshot.CurrentMapScene;
-            if (targetKey == _lastAutoFollowTarget && Time.unscaledTime - _lastAutoFollowAt < 2.5f)
+
+            // Require the same mismatch on consecutive snapshots (~1s apart)
+            // so a scene change that is already in flight can land first.
+            if (targetKey != _followMismatchKey)
+            {
+                _followMismatchKey = targetKey;
+                _followMismatchCount = 1;
+                return;
+            }
+
+            if (++_followMismatchCount < 2)
+                return;
+
+            if (targetKey == _lastAutoFollowTarget && Time.unscaledTime - _lastAutoFollowAt < AUTO_FOLLOW_RETRY_SECONDS)
                 return;
 
             if (snapshot.IsInLevel && Enum.IsDefined(typeof(Levels), snapshot.CurrentLevel))
             {
+                if (PacketDispatcher.IsInOrLoadingLevel((Levels)snapshot.CurrentLevel))
+                    return;
+
                 _lastAutoFollowTarget = targetKey;
                 _lastAutoFollowAt = Time.unscaledTime;
                 ConnectionHUD.Show("Following host into level...");
@@ -1016,7 +1048,19 @@ namespace CupheadOnline.Sync
             return scene != Scenes.scene_start
                 && scene != Scenes.scene_title
                 && scene != Scenes.scene_slot_select
-                && scene != Scenes.scene_menu;
+                && scene != Scenes.scene_menu
+                && scene != Scenes.scene_load_helper;
+        }
+
+        private static bool IsTransitionalScene(string sceneName)
+        {
+            return string.Equals(sceneName, Scenes.scene_load_helper.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsSceneLoaderBusy()
+        {
+            try { return SceneLoader.CurrentlyLoading; }
+            catch { return false; }
         }
 
         private static string GetActiveSceneName()
@@ -1073,6 +1117,8 @@ namespace CupheadOnline.Sync
             _lastRecoveryBundleAt = -1f;
             _lastAutoFollowAt = -1f;
             _lastAutoFollowTarget = string.Empty;
+            _followMismatchKey = string.Empty;
+            _followMismatchCount = 0;
             _sceneMismatchStreak = 0;
             _recoveryRequestCount = 0;
             _recoveryBundleCount = 0;
@@ -1104,6 +1150,8 @@ namespace CupheadOnline.Sync
             _lastRecoveryBundleAt = -1f;
             _lastAutoFollowAt = -1f;
             _lastAutoFollowTarget = string.Empty;
+            _followMismatchKey = string.Empty;
+            _followMismatchCount = 0;
             _sceneMismatchStreak = 0;
             _recoveryRequestCount = 0;
             _recoveryBundleCount = 0;

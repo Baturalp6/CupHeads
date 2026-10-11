@@ -93,6 +93,12 @@ namespace CupheadOnline.Sync
                 (DamageDealer.DamageSource)pkt.Source);
             SetStoneTime(info, pkt.StoneTime);
 
+            // The owning peer already resolved invulnerability when the hit
+            // landed there. The local copy's i-frame window started at a
+            // different (network-delayed) moment, so clear it to make sure
+            // an authoritative hit is not dropped.
+            ClearInvulnerabilityTimer(dr);
+
             try
             {
                 _applyingAuthorizedDamage = true;
@@ -136,6 +142,18 @@ namespace CupheadOnline.Sync
         {
             Reset();
             _lastAppliedTicks.Clear();
+        }
+
+        private static readonly FieldInfo _receiverTimerField =
+            typeof(PlayerDamageReceiver).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        private static void ClearInvulnerabilityTimer(PlayerDamageReceiver receiver)
+        {
+            if (_receiverTimerField == null || _receiverTimerField.FieldType != typeof(float))
+                return;
+
+            try { _receiverTimerField.SetValue(receiver, 0f); }
+            catch { }
         }
 
         private static void SetStoneTime(DamageDealer.DamageInfo info, float stoneTime)

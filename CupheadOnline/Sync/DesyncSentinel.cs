@@ -13,10 +13,15 @@ namespace CupheadOnline.Sync
     public static class DesyncSentinel
     {
         const float SAMPLE_INTERVAL = 2f;
-        const float POSITION_TOLERANCE = 5f;
+        // The guest renders the host's player through a jitter buffer plus
+        // smoothing, so it trails the host's live position by several ticks.
+        // At up to 1100 units/s (dash) that is easily 100+ units of honest lag.
+        const float POSITION_TOLERANCE_BASE = 60f;
+        const float MAX_PLAYER_SPEED = 1100f;
+        const float PROXY_SMOOTHING_LAG = 0.1f;
         const float BOSS_HP_TOLERANCE_ABS = 60f;
         const float BOSS_HP_TOLERANCE_PCT = 0.08f;
-        const int STRIKES_TO_ACT = 2;
+        const int STRIKES_TO_ACT = 3;
         const float ACT_COOLDOWN = 10f;
 
         static float _nextSampleAt;
@@ -92,7 +97,7 @@ namespace CupheadOnline.Sync
             Vector2 localPos;
             if (pkt.HasP1 && TryGetPlayerPosition(PlayerId.PlayerOne, out localPos))
             {
-                if (Vector2.Distance(localPos, new Vector2(pkt.P1X, pkt.P1Y)) > POSITION_TOLERANCE)
+                if (Vector2.Distance(localPos, new Vector2(pkt.P1X, pkt.P1Y)) > GetPositionTolerance())
                     mismatch = true;
             }
 
@@ -116,6 +121,15 @@ namespace CupheadOnline.Sync
             if (pkt.HasBossHp)
                 EnemySyncManager.ForceLocalBossHp(pkt.BossHp);
             SessionSync.RequestRecovery();
+        }
+
+        static float GetPositionTolerance()
+        {
+            int latencyMs = Plugin.Net != null ? Mathf.Max(0, Plugin.Net.Latency) : 0;
+            // Mirrors RemotePlayer's ping-scaled jitter buffer depth (1-4 ticks).
+            int bufferTicks = Mathf.Clamp(1 + latencyMs / 50, 1, 4);
+            float bufferSeconds = bufferTicks * Time.fixedDeltaTime;
+            return POSITION_TOLERANCE_BASE + MAX_PLAYER_SPEED * (bufferSeconds + PROXY_SMOOTHING_LAG);
         }
 
         static bool TryGetPlayerPosition(PlayerId id, out Vector2 position)

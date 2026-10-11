@@ -36,6 +36,31 @@ namespace CupheadOnline.Sync
         }
 
         /// <summary>
+        /// Called on both peers right before a level starts. Restarts the shared
+        /// PRNG from the level's seed and seeds UnityEngine.Random with it too:
+        /// boss patterns and spawns mostly use UnityEngine.Random directly, so
+        /// without this both machines rolled completely different attacks.
+        /// Loading screens consume different amounts of randomness on each PC,
+        /// which is why this happens at level start instead of on packet receipt.
+        /// </summary>
+        public static void ReseedForLevelStart()
+        {
+            if (!IsSeeded)
+                return;
+
+            uint seed = CurrentSeed;
+            SetSeed(seed);
+            try
+            {
+                UnityEngine.Random.InitState(unchecked((int)seed));
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[RngSync] Could not seed UnityEngine.Random: " + ex.Message);
+            }
+        }
+
+        /// <summary>
         /// Generate a new random seed for the next SceneChangePacket and seed the
         /// LOCAL PRNG with it too, so the sender (host) runs the same sequence as
         /// the peer that receives the seed.

@@ -338,17 +338,9 @@ namespace CupheadOnline.Patches
         }
     }
 
-    [HarmonyPatch(typeof(PlayerManager), "BothPlayersActive")]
-    public static class PlayerManagerBothPlayersActivePatch
-    {
-        static void Postfix(ref bool __result)
-        {
-            if (!MultiplayerSession.IsActive)
-                return;
-
-            int count;
-            if (PlayerSelectionMath.TryGetCount(out count))
-                __result = count > 1;
-        }
-    }
+    // NOTE: PlayerManager.BothPlayersActive is intentionally not patched. The
+    // game defines it as "both players exist" (dead players still count), and
+    // the chess bosses use it to pick multiplayer parry damage and counts.
+    // Overriding it with "alive and active" changed boss behaviour whenever one
+    // player was down.
 }

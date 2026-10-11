@@ -33,13 +33,53 @@ namespace CupheadOnline.Patches
 
         internal static bool IsRawQuery => _rawQueryDepth > 0;
 
-        internal static object GetActions(PlayerId playerId)
+        // Every Rewired query in the game goes through the patched getters below,
+        // so resolving the two Rewired players must be cheap: bind the getter
+        // once and cache its results per frame.
+        static readonly Func<PlayerId, object> GetPlayerInputDelegate = BindGetPlayerInput();
+        static int _actionsCacheFrame = -1;
+        static object _cachedActionsOne;
+        static object _cachedActionsTwo;
+
+        static Func<PlayerId, object> BindGetPlayerInput()
         {
             if (GetPlayerInputMethod == null)
                 return null;
 
-            try { return GetPlayerInputMethod.Invoke(null, new object[] { playerId }); }
+            try
+            {
+                return (Func<PlayerId, object>)Delegate.CreateDelegate(
+                    typeof(Func<PlayerId, object>), GetPlayerInputMethod);
+            }
+            catch
+            {
+                return id => GetPlayerInputMethod.Invoke(null, new object[] { id });
+            }
+        }
+
+        static object ResolveActionsUncached(PlayerId playerId)
+        {
+            if (GetPlayerInputDelegate == null)
+                return null;
+
+            try { return GetPlayerInputDelegate(playerId); }
             catch { return null; }
+        }
+
+        internal static object GetActions(PlayerId playerId)
+        {
+            if (playerId != PlayerId.PlayerOne && playerId != PlayerId.PlayerTwo)
+                return ResolveActionsUncached(playerId);
+
+            int frame = Time.frameCount;
+            if (frame != _actionsCacheFrame)
+            {
+                _actionsCacheFrame = frame;
+                _cachedActionsOne = ResolveActionsUncached(PlayerId.PlayerOne);
+                _cachedActionsTwo = ResolveActionsUncached(PlayerId.PlayerTwo);
+            }
+
+            return playerId == PlayerId.PlayerOne ? _cachedActionsOne : _cachedActionsTwo;
         }
 
         internal static bool TryResolvePlayerId(object rewiredPlayer, out PlayerId playerId)
@@ -172,8 +212,57 @@ namespace CupheadOnline.Patches
                 AxisX = axisX,
                 AxisY = axisY,
                 Buttons = buttons,
+                PressLatch = UpdatePressLatch(playerId, buttons),
                 Tick = NextInputTick(),
             };
+        }
+
+        const float PressLatchSeconds = 0.1f;
+
+        sealed class PressLatchState
+        {
+            public uint PreviousButtons;
+            public readonly float[] LastDownAt = CreateLatchTimes();
+        }
+
+        static readonly System.Collections.Generic.Dictionary<PlayerId, PressLatchState> _pressLatches =
+            new System.Collections.Generic.Dictionary<PlayerId, PressLatchState>(3);
+
+        static float[] CreateLatchTimes()
+        {
+            var times = new float[32];
+            for (int i = 0; i < times.Length; i++)
+                times[i] = float.NegativeInfinity;
+            return times;
+        }
+
+        /// <summary>
+        /// Records press edges per sender slot and reports every button whose
+        /// last press happened within the latch window.
+        /// </summary>
+        static uint UpdatePressLatch(PlayerId playerId, uint buttons)
+        {
+            PressLatchState state;
+            if (!_pressLatches.TryGetValue(playerId, out state))
+            {
+                state = new PressLatchState();
+                _pressLatches[playerId] = state;
+            }
+
+            float now = Time.unscaledTime;
+            uint down = buttons & ~state.PreviousButtons;
+            state.PreviousButtons = buttons;
+
+            uint latch = 0u;
+            for (int i = 0; i < 32; i++)
+            {
+                uint mask = 1u << i;
+                if ((down & mask) != 0u)
+                    state.LastDownAt[i] = now;
+                if (now - state.LastDownAt[i] <= PressLatchSeconds)
+                    latch |= mask;
+            }
+            return latch;
         }
 
         static uint NextInputTick()
@@ -193,6 +282,7 @@ namespace CupheadOnline.Patches
         static void ResetInputSequence()
         {
             _nextInputTick = 1;
+            _pressLatches.Clear();
         }
 
         static void Pack(PlayerId playerId, CupheadButton button, ref uint buttons)

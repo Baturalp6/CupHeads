@@ -23,9 +23,14 @@ namespace CupheadOnline.Sync
             public uint UpEdges;
             public readonly int[] DownServedFrames = CreateServedFrameBuffer();
             public readonly int[] UpServedFrames = CreateServedFrameBuffer();
+            public readonly float[] DownMarkedAt = new float[32];
+            public readonly float[] UpMarkedAt = new float[32];
         }
 
         const int MAX_STALL = 45; // ~750 ms at 60 Hz before inputs are released
+        // An edge nobody queried within this window (e.g. jump pressed while
+        // the player was input-locked) is dropped instead of firing later.
+        const float EDGE_LIFETIME = 0.25f;
 
         static readonly Dictionary<byte, RemoteInputState> _states =
             new Dictionary<byte, RemoteInputState>(2);
@@ -63,7 +68,7 @@ namespace CupheadOnline.Sync
             state.HasReceivedTick = true;
             state.LastReceivedTick = pkt.Tick;
             state.StallFrames = 0;
-            RecomputeEdges(state);
+            AccumulateEdges(state);
         }
 
         public static void Apply(PlayerId playerId, InputFramePacket pkt)
@@ -101,7 +106,7 @@ namespace CupheadOnline.Sync
             if (!_states.TryGetValue(participantId, out state) || !state.HasData)
                 return false;
 
-            return ConsumeEdgeForFrame(state.DownEdges, state.DownServedFrames, button);
+            return ConsumeEdgeForFrame(ref state.DownEdges, state.DownServedFrames, state.DownMarkedAt, button);
         }
 
         public static bool WasReleasedThisFrame(byte participantId, CupheadButton button)
@@ -110,7 +115,7 @@ namespace CupheadOnline.Sync
             if (!_states.TryGetValue(participantId, out state) || !state.HasData)
                 return false;
 
-            return ConsumeEdgeForFrame(state.UpEdges, state.UpServedFrames, button);
+            return ConsumeEdgeForFrame(ref state.UpEdges, state.UpServedFrames, state.UpMarkedAt, button);
         }
 
         public static bool IsPressed(byte participantId, CupheadButton button)
@@ -178,29 +183,65 @@ namespace CupheadOnline.Sync
             return state;
         }
 
-        static void RecomputeEdges(RemoteInputState state)
+        /// <summary>
+        /// Adds this packet's press/release edges to the pending set instead of
+        /// replacing it. Several packets can arrive between two game queries
+        /// (jitter, frame-rate differences); overwriting the edge mask used to
+        /// erase presses the game had not read yet. PressLatch additionally
+        /// recovers taps whose own frames were dropped in transit.
+        /// </summary>
+        static void AccumulateEdges(RemoteInputState state)
         {
-            state.DownEdges = state.Current.Buttons & ~state.Previous.Buttons;
-            state.UpEdges = state.Previous.Buttons & ~state.Current.Buttons;
-            ResetServedFrames(state.DownServedFrames);
-            ResetServedFrames(state.UpServedFrames);
+            uint down = (state.Current.Buttons & ~state.Previous.Buttons)
+                      | (state.Current.PressLatch & ~state.Previous.PressLatch);
+            uint up = state.Previous.Buttons & ~state.Current.Buttons;
+
+            MarkNewEdges(ref state.DownEdges, state.DownServedFrames, state.DownMarkedAt, down);
+            MarkNewEdges(ref state.UpEdges, state.UpServedFrames, state.UpMarkedAt, up);
         }
 
-        static bool ConsumeEdgeForFrame(uint edges, int[] servedFrames, CupheadButton button)
+        static void MarkNewEdges(ref uint pending, int[] servedFrames, float[] markedAt, uint newEdges)
+        {
+            if (newEdges == 0u)
+                return;
+
+            float now = Time.unscaledTime;
+            pending |= newEdges;
+            for (int i = 0; i < 32; i++)
+            {
+                if ((newEdges & (1u << i)) != 0u)
+                {
+                    servedFrames[i] = -1;
+                    markedAt[i] = now;
+                }
+            }
+        }
+
+        /// <summary>
+        /// A pending edge reads as true for every query during the first frame
+        /// the game asks for it, then expires.
+        /// </summary>
+        static bool ConsumeEdgeForFrame(ref uint pending, int[] servedFrames, float[] markedAt, CupheadButton button)
         {
             int buttonIndex = (int)button;
             if (buttonIndex < 0 || buttonIndex >= 32)
                 return false;
 
             uint mask = 1u << buttonIndex;
-            if ((edges & mask) == 0u)
-                return false;
-
             int frame = Time.frameCount;
             if (servedFrames[buttonIndex] == frame)
                 return true;
-            if (servedFrames[buttonIndex] >= 0)
+            if ((pending & mask) == 0u)
                 return false;
+
+            if (servedFrames[buttonIndex] >= 0
+             || Time.unscaledTime - markedAt[buttonIndex] > EDGE_LIFETIME)
+            {
+                // Served in an earlier frame and no newer edge since: expire it.
+                pending &= ~mask;
+                servedFrames[buttonIndex] = -1;
+                return false;
+            }
 
             servedFrames[buttonIndex] = frame;
             return true;

@@ -52,10 +52,14 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            // Host: skip the gate if the guest already reported this level ready.
+            // Host: skip the gate if the guest already reported this level ready
+            // during the current load. The memory is consumed here and wiped at
+            // every new host-initiated load, so a quick retry of the same level
+            // no longer reuses the previous attempt's "ready".
             if (_lastGuestReadyLevel == levelEnum
              && Time.unscaledTime - _lastGuestReadyAt <= READY_MEMORY)
             {
+                ForgetGuestReady();
                 Plugin.Log.LogInfo("[ReadyGate] Guest already ready for level " + levelEnum + " - no hold.");
                 return;
             }
@@ -95,6 +99,18 @@ namespace CupheadOnline.Sync
 
             if (Time.unscaledTime >= _waitDeadline)
                 Release("Continuing without partner confirmation.");
+        }
+
+        /// <summary>Host-side: a new level load is starting; old readiness is void.</summary>
+        public static void OnHostLevelLoadStarted()
+        {
+            ForgetGuestReady();
+        }
+
+        static void ForgetGuestReady()
+        {
+            _lastGuestReadyLevel = int.MinValue;
+            _lastGuestReadyAt = -1000f;
         }
 
         public static void OnSceneChanged()
